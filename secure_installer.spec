@@ -13,7 +13,8 @@ def get_tcl_tk_dirs():
     datas = []
     for d in [tcl_dir, tk_dir, tcl_root, tk_root]:
         if os.path.exists(d):
-            datas.append((d, d))
+            # Use only the folder name as the destination (relative path)
+            datas.append((d, os.path.basename(d)))
     return datas
 
 datas = get_tcl_tk_dirs()

@@ -33,6 +33,29 @@ def run_gui(main_callback):
     entry = ttk.Entry(frame, font=("Segoe UI", 13), width=60)
     entry.pack(pady=10)
 
+    def start_install():
+        source = entry.get().strip()
+        if not source:
+            messagebox.showerror("Error", "Please enter a URL or select a file/folder.")
+            return
+        opts = {
+            'scan': scan_var.get(),
+            'sandbox': sandbox_var.get(),
+            'sig': sig_var.get(),
+            'allow_unsigned': unsigned_var.get()
+        }
+        # Clear previous results
+        results_text.delete(1.0, tk.END)
+        for row in tree.get_children():
+            tree.delete(row)
+        status_var.set("Starting installation...")
+        def gui_progress(val):
+            progress.set(val)
+            progress_bar.update()
+        def gui_result(msg, status=None):
+            show_result(msg, status)
+        threading.Thread(target=main_callback, args=(source, opts, gui_progress, gui_result)).start()
+
     btn_frame = ttk.Frame(frame)
     btn_frame.pack(pady=10)
     ttk.Button(btn_frame, text="Browse File", command=lambda: entry.insert(0, filedialog.askopenfilename(filetypes=[("Executable files", "*.exe")]))).pack(side=tk.LEFT, padx=7)
@@ -126,28 +149,5 @@ def run_gui(main_callback):
 
     results_text.tag_config('error', foreground='#ff5555')
     results_text.tag_config('success', foreground='#50fa7b')
-
-    def start_install():
-        source = entry.get().strip()
-        if not source:
-            messagebox.showerror("Error", "Please enter a URL or select a file/folder.")
-            return
-        opts = {
-            'scan': scan_var.get(),
-            'sandbox': sandbox_var.get(),
-            'sig': sig_var.get(),
-            'allow_unsigned': unsigned_var.get()
-        }
-        # Clear previous results
-        results_text.delete(1.0, tk.END)
-        for row in tree.get_children():
-            tree.delete(row)
-        status_var.set("Starting installation...")
-        def gui_progress(val):
-            progress.set(val)
-            progress_bar.update()
-        def gui_result(msg, status=None):
-            show_result(msg, status)
-        threading.Thread(target=main_callback, args=(source, opts, gui_progress, gui_result)).start()
 
     root.mainloop()
