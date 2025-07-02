@@ -1,0 +1,2 @@
+{"timestamp": "2025-07-02T18:23:40.098161Z", "event_type": "installer_start", "details": {"args": []}}
+{"timestamp": "2025-07-02T18:23:40.098629Z", "event_type": "error", "details": {"stage": "main", "error": "_path_isfile: path should be string, bytes, os.PathLike or integer, not NoneType"}}
