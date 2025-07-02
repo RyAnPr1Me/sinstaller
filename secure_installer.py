@@ -522,10 +522,9 @@ def main(source, opts=None, progress_callback=None, gui_result_callback=None):
         return
 
 if __name__ == '__main__':
-    verify_self_integrity()
-    check_for_updates()
-    check_and_update(__version__, repo="RyAnPr1Me/sinstaller", dest_folder=os.path.dirname(os.path.abspath(__file__)), interval_hours=12)
-    if '--gui' in sys.argv:
+    import sys
+    # Always launch GUI if no CLI args (other than script name)
+    if len(sys.argv) == 1 or '--gui' in sys.argv:
         run_gui(main)
     else:
         import argparse
