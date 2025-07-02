@@ -16,33 +16,79 @@ from urllib.parse import urlparse
 import tkinter as tk
 from tkinter import filedialog, messagebox, simpledialog
 from tkinter import ttk
+from gui import run_gui
+from blocklist_utils import check_blocklist
+from utils import compute_file_hash, is_valid_url, is_valid_path, sanitize_filename
+from logging_utils import log_event
+from scan_utils import scan_with_defender, run_in_sandbox
 
 # --- CONFIG ---
 DEFENDER_PATH = r'C:\Program Files\Windows Defender\MpCmdRun.exe'
 
 # --- HELPERS ---
 def download_file(url, dest_folder):
-    local_filename = os.path.join(dest_folder, url.split('/')[-1])
-    with urllib.request.urlopen(url) as response:
-        data = response.read()
-        logged_file_write(local_filename, data)
-    return local_filename
+    try:
+        local_filename = os.path.join(dest_folder, url.split('/')[-1])
+        with urllib.request.urlopen(url) as response:
+            data = response.read()
+            logged_file_write(local_filename, data)
+        return local_filename
+    except Exception as e:
+        print(Fore.RED + f"[!] Failed to download file: {e}" + Style.RESET_ALL)
+        log_event('error', {'stage': 'download_file', 'error': str(e)})
+        return None
+
+def download_files(urls, dest_folder, gui_result_callback=None):
+    import concurrent.futures
+    results = {}
+    def _download(url):
+        try:
+            local_filename = os.path.join(dest_folder, url.split('/')[-1])
+            with urllib.request.urlopen(url) as response:
+                data = response.read()
+                logged_file_write(local_filename, data)
+            if gui_result_callback:
+                gui_result_callback(f"[+] Downloaded: {url}")
+            return local_filename
+        except Exception as e:
+            if gui_result_callback:
+                gui_result_callback(f"[!] Failed to download {url}: {e}")
+            log_event('error', {'stage': 'download_file', 'url': url, 'error': str(e)})
+            return None
+    with concurrent.futures.ThreadPoolExecutor(max_workers=min(4, len(urls))) as executor:
+        future_to_url = {executor.submit(_download, url): url for url in urls}
+        for future in concurrent.futures.as_completed(future_to_url):
+            url = future_to_url[future]
+            result = future.result()
+            results[url] = result
+    return [f for f in results.values() if f]
 
 def find_exe_files(folder):
-    return [str(p) for p in Path(folder).rglob('*.exe')]
+    try:
+        return [str(p) for p in Path(folder).rglob('*.exe')]
+    except Exception as e:
+        print(Fore.RED + f"[!] Error finding .exe files: {e}" + Style.RESET_ALL)
+        log_event('error', {'stage': 'find_exe_files', 'error': str(e)})
+        return []
 
 def scan_with_defender(exe_path):
-    print(f"Scanning {exe_path} with Windows Defender...")
-    result = logged_subprocess_run([
-        DEFENDER_PATH, '-Scan', '-ScanType', '3', '-File', exe_path
-    ], capture_output=True, text=True)
-    print(result.stdout)
-    return 'No threats' in result.stdout
+    try:
+        print(f"Scanning {exe_path} with Windows Defender...")
+        result = logged_subprocess_run([
+            DEFENDER_PATH, '-Scan', '-ScanType', '3', '-File', exe_path
+        ], capture_output=True, text=True)
+        print(result.stdout)
+        return 'No threats' in result.stdout
+    except Exception as e:
+        print(Fore.RED + f"[!] Error scanning with Defender: {e}" + Style.RESET_ALL)
+        log_event('error', {'stage': 'scan_with_defender', 'error': str(e)})
+        return False
 
 def run_in_sandbox(exe_path):
-    print(f"Running {exe_path} in Windows Sandbox...")
-    # Create a .wsb config file for Windows Sandbox with PowerShell transcript
-    wsb_content = f"""
+    try:
+        print(f"Running {exe_path} in Windows Sandbox...")
+        # Create a .wsb config file for Windows Sandbox with PowerShell transcript
+        wsb_content = f"""
 <Configuration>
   <MappedFolders>
     <MappedFolder>
@@ -55,25 +101,50 @@ def run_in_sandbox(exe_path):
   </LogonCommand>
 </Configuration>
 """
-    with tempfile.NamedTemporaryFile('w', delete=False, suffix='.wsb') as f:
-        f.write(wsb_content)
-        wsb_path = f.name
-    logged_subprocess_run(['WindowsSandbox.exe', wsb_path])
-    print("Sandbox session ended. Attempting to collect activity log...")
-    # Try to collect the log from the mapped folder
-    sandbox_log = os.path.join(os.path.dirname(exe_path), 'activity.log')
-    if os.path.exists(sandbox_log):
-        with open(sandbox_log, 'r', encoding='utf-8', errors='ignore') as f:
-            log_event('sandbox_activity_log', {'log': f.read()})
-        print(Fore.GREEN + '[*] Collected sandbox activity log.' + Style.RESET_ALL)
-    else:
-        print(Fore.YELLOW + '[!] No sandbox activity log found.' + Style.RESET_ALL)
-    os.remove(wsb_path)
-    return True  # For prototype, assume user checks manually
+        with tempfile.NamedTemporaryFile('w', delete=False, suffix='.wsb') as f:
+            f.write(wsb_content)
+            wsb_path = f.name
+        logged_subprocess_run(['WindowsSandbox.exe', wsb_path])
+        print("Sandbox session ended. Attempting to collect activity log...")
+        sandbox_log = os.path.join(os.path.dirname(exe_path), 'activity.log')
+        if os.path.exists(sandbox_log):
+            with open(sandbox_log, 'r', encoding='utf-8', errors='ignore') as f:
+                log_content = f.read()
+                log_event('sandbox_activity_log', {'log': log_content})
+                detected, pattern = detect_persistence_in_log(log_content)
+                if detected:
+                    print(Fore.RED + "[!!!] PERSISTENCE MECHANISM DETECTED!" + Style.RESET_ALL)
+                    print(Fore.RED + f"[!!!] Pattern: {pattern}" + Style.RESET_ALL)
+                    print(Fore.RED + f"[!!!] This installer tried to add a scheduled task, service, or autorun entry!" + Style.RESET_ALL)
+                    message = ("[!!!] PERSISTENCE MECHANISM DETECTED!\n"
+                               f"Pattern: {pattern}\n"
+                               "This installer tried to add a scheduled task, service, or autorun entry!\n"
+                               "INSTALLATION BLOCKED.")
+                    log_event('persistence_detected', {'pattern': pattern, 'log_excerpt': log_content[:500]})
+                    raise RuntimeError(message)
+                # --- Visual Timeline ---
+                print(Fore.CYAN + "\n[Behavior Timeline]")
+                timeline = parse_activity_log_timeline(log_content)
+                for event in timeline:
+                    print(event)
+                print(Style.RESET_ALL)
+            print(Fore.GREEN + '[*] Collected sandbox activity log.' + Style.RESET_ALL)
+        else:
+            print(Fore.YELLOW + '[!] No sandbox activity log found.' + Style.RESET_ALL)
+        os.remove(wsb_path)
+        return True  # For prototype, assume user checks manually
+    except Exception as e:
+        print(Fore.RED + f"[!] Error running in sandbox: {e}" + Style.RESET_ALL)
+        log_event('error', {'stage': 'run_in_sandbox', 'error': str(e)})
+        return False
 
 def install_exe(exe_path):
-    print(f"Running installer: {exe_path}")
-    logged_subprocess_run([exe_path])
+    try:
+        print(f"Running installer: {exe_path}")
+        logged_subprocess_run([exe_path])
+    except Exception as e:
+        print(Fore.RED + f"[!] Error running installer: {e}" + Style.RESET_ALL)
+        log_event('error', {'stage': 'install_exe', 'error': str(e)})
 
 def check_digital_signature(exe_path):
     try:
@@ -200,6 +271,49 @@ def sanitize_filename(filename):
     filename = os.path.basename(filename)
     return re.sub(r'[^a-zA-Z0-9._-]', '_', filename)
 
+def detect_persistence_in_log(log_text):
+    persistence_patterns = [
+        r'schtasks',
+        r'CreateService',
+        r'Service Control Manager',
+        r'\\Run(Once)?',
+        r'Startup',
+        r'AddScheduledTask',
+        r'RegisterService',
+        r'\\CurrentVersion\\Run',
+        r'\\CurrentVersion\\RunOnce',
+        r'\\Windows\\Start Menu\\Programs\\Startup',
+    ]
+    for pattern in persistence_patterns:
+        if re.search(pattern, log_text, re.IGNORECASE):
+            return True, pattern
+    return False, None
+
+def parse_activity_log_timeline(log_text):
+    timeline = []
+    # Regex for PowerShell transcript timestamps: e.g. '2025-07-02 12:34:56'
+    ts_re = re.compile(r'^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})', re.MULTILINE)
+    # Simple event patterns
+    file_write_re = re.compile(r'(?:Created|Written|Write|Saved) file (.+)', re.IGNORECASE)
+    reg_mod_re = re.compile(r'(?:Set|Created|Modified|Write) registry (.+)', re.IGNORECASE)
+    net_call_re = re.compile(r'(?:Connecting|Connected|Outbound|Request|Download|Upload|POST|GET|PUT|TCP|UDP|to) (.+)', re.IGNORECASE)
+    ps_hidden_re = re.compile(r'Hidden PowerShell|powershell.exe.*-WindowStyle Hidden', re.IGNORECASE)
+    lines = log_text.splitlines()
+    for i, line in enumerate(lines):
+        ts_match = ts_re.match(line)
+        ts = ts_match.group(1) if ts_match else None
+        if file_write_re.search(line):
+            timeline.append(f"[{ts or '??'}] File write: {file_write_re.search(line).group(1)}")
+        elif reg_mod_re.search(line):
+            timeline.append(f"[{ts or '??'}] Registry mod: {reg_mod_re.search(line).group(1)}")
+        elif net_call_re.search(line):
+            timeline.append(f"[{ts or '??'}] Network call: {net_call_re.search(line).group(1)}")
+        elif ps_hidden_re.search(line):
+            timeline.append(f"[{ts or '??'}] Launched hidden PowerShell")
+    if not timeline:
+        timeline.append("[??] No significant events detected in activity log.")
+    return timeline
+
 # --- LOGGING WRAPPERS ---
 def logged_subprocess_run(args, **kwargs):
     log_event('process_spawn', {'args': args, 'cwd': kwargs.get('cwd', os.getcwd())})
@@ -210,172 +324,154 @@ def logged_file_write(path, data):
     with open(path, 'wb') as f:
         f.write(data)
 
-def run_gui():
-    root = tk.Tk()
-    root.title("Secure Installer")
-    root.geometry("600x400")
-    root.configure(bg="#23272e")
-    style = ttk.Style(root)
-    style.theme_use('clam')
-    style.configure('.', background="#23272e", foreground="#f8f8f2", fieldbackground="#23272e", bordercolor="#44475a")
-    style.configure('TButton', background="#44475a", foreground="#f8f8f2", borderwidth=1, focusthickness=3, focuscolor='none')
-    style.map('TButton', background=[('active', '#6272a4')])
-    style.configure('TLabel', background="#23272e", foreground="#f8f8f2")
-    style.configure('TEntry', fieldbackground="#282a36", foreground="#f8f8f2")
-
-    def browse_file():
-        path = filedialog.askopenfilename(filetypes=[("Executable files", "*.exe")])
-        if path:
-            entry.delete(0, tk.END)
-            entry.insert(0, path)
-
-    def browse_folder():
-        path = filedialog.askdirectory()
-        if path:
-            entry.delete(0, tk.END)
-            entry.insert(0, path)
-
-    progress = tk.DoubleVar(value=0)
-    progress_bar = ttk.Progressbar(frame, variable=progress, maximum=100, length=400, mode='determinate')
-    progress_bar.pack(pady=10)
-
-    # Install options
-    options_frame = ttk.LabelFrame(frame, text="Install Options", padding=10)
-    options_frame.pack(pady=10, fill='x')
-    scan_var = tk.BooleanVar(value=True)
-    sandbox_var = tk.BooleanVar(value=True)
-    sig_var = tk.BooleanVar(value=True)
-    unsigned_var = tk.BooleanVar(value=False)
-    ttk.Checkbutton(options_frame, text="Scan with Windows Defender", variable=scan_var).pack(anchor='w')
-    ttk.Checkbutton(options_frame, text="Run in Sandbox", variable=sandbox_var).pack(anchor='w')
-    ttk.Checkbutton(options_frame, text="Require Digital Signature", variable=sig_var).pack(anchor='w')
-    ttk.Checkbutton(options_frame, text="Allow Unsigned Installers (Override)", variable=unsigned_var).pack(anchor='w')
-
-    def start_install():
-        source = entry.get().strip()
-        if not source:
-            messagebox.showerror("Error", "Please enter a URL or select a file/folder.")
+def main(source, opts=None, progress_callback=None, gui_result_callback=None):
+    try:
+        print(Fore.BLUE + "[*] Secure Installer started." + Style.RESET_ALL)
+        log_event('installer_start', {'args': sys.argv[1:]})
+        # Step 1: Validate source (support multi-URL input)
+        url_list = []
+        if isinstance(source, list):
+            url_list = source
+        elif isinstance(source, str) and (source.strip().startswith('http') or '\n' in source or ',' in source):
+            # Multi-line or comma-separated URLs
+            url_list = [u.strip() for u in re.split(r'[\n,]', source) if u.strip()]
+        if url_list:
+            if gui_result_callback:
+                gui_result_callback(f"[*] Downloading {len(url_list)} installers...")
+            downloaded_files = download_files(url_list, tempfile.gettempdir(), gui_result_callback)
+            if not downloaded_files:
+                if gui_result_callback:
+                    gui_result_callback("[!] No files downloaded. Aborting.")
+                print(Fore.RED + f"[!] Download failed. Aborting." + Style.RESET_ALL)
+                return
+            exe_files = downloaded_files
+        elif is_valid_url(source):
+            print(Fore.GREEN + f"[+] Valid URL provided: {source}" + Style.RESET_ALL)
+            downloaded_file = download_file(source, tempfile.gettempdir())
+            if not downloaded_file:
+                print(Fore.RED + f"[!] Download failed. Aborting." + Style.RESET_ALL)
+                return
+            exe_files = [downloaded_file]
+        elif os.path.isfile(source) and source.endswith('.exe'):
+            print(Fore.GREEN + f"[+] Valid file provided: {source}" + Style.RESET_ALL)
+            exe_files = [source]
+        elif os.path.isdir(source):
+            print(Fore.GREEN + f"[+] Valid folder provided: {source}" + Style.RESET_ALL)
+            exe_files = find_exe_files(source)
+            if not exe_files:
+                print(Fore.RED + f"[!] No .exe files found in folder." + Style.RESET_ALL)
+                return
+        else:
+            print(Fore.RED + "[!] Invalid source. Provide a valid URL, file, folder, or list of URLs." + Style.RESET_ALL)
             return
-        # Save options to a temp file for CLI
-        import tempfile, json
-        opts = {
-            'scan': scan_var.get(),
-            'sandbox': sandbox_var.get(),
-            'sig': sig_var.get(),
-            'allow_unsigned': unsigned_var.get()
-        }
-        opts_path = os.path.join(tempfile.gettempdir(), 'secure_installer_opts.json')
-        with open(opts_path, 'w') as f:
-            json.dump(opts, f)
-        # Instead of os.execl, call main directly with a progress callback
-        def gui_progress(val):
-            progress.set(val)
-            progress_bar.update()
-        root.destroy()
-        main(source, opts, gui_progress)
 
-    frame = ttk.Frame(root, padding=20)
-    frame.pack(expand=True, fill='both')
+        # Load options if provided
+        scan = True
+        sandbox = True
+        sig = True
+        allow_unsigned = False
+        if opts:
+            scan = opts.get('scan', True)
+            sandbox = opts.get('sandbox', True)
+            sig = opts.get('sig', True)
+            allow_unsigned = opts.get('allow_unsigned', False)
 
-    label = ttk.Label(frame, text="Secure Installer", font=("Segoe UI", 20, "bold"))
-    label.pack(pady=(0, 20))
-
-    entry = ttk.Entry(frame, font=("Segoe UI", 12), width=40)
-    entry.pack(pady=10)
-
-    btn_frame = ttk.Frame(frame)
-    btn_frame.pack(pady=10)
-    ttk.Button(btn_frame, text="Browse File", command=browse_file).pack(side=tk.LEFT, padx=5)
-    ttk.Button(btn_frame, text="Browse Folder", command=browse_folder).pack(side=tk.LEFT, padx=5)
-    ttk.Button(btn_frame, text="Install", command=start_install).pack(side=tk.LEFT, padx=5)
-
-    root.mainloop()
-
-def main(source, opts=None, progress_callback=None):
-    # Main logic of the installer
-    print(Fore.BLUE + "[*] Secure Installer started." + Style.RESET_ALL)
-    log_event('installer_start', {'args': sys.argv[1:]})
-
-    # Step 1: Validate source
-    if is_valid_url(source):
-        print(Fore.GREEN + f"[+] Valid URL provided: {source}" + Style.RESET_ALL)
-        # Download and install from URL
-        downloaded_file = download_file(source, tempfile.gettempdir())
-        install_exe(downloaded_file)
-    elif os.path.isfile(source) and source.endswith('.exe'):
-        print(Fore.GREEN + f"[+] Valid file provided: {source}" + Style.RESET_ALL)
-        # Local file installation
-        install_exe(source)
-    elif os.path.isdir(source):
-        print(Fore.GREEN + f"[+] Valid folder provided: {source}" + Style.RESET_ALL)
-        # Install all EXE files in the folder
-        exe_files = find_exe_files(source)
-        for exe_file in exe_files:
-            install_exe(exe_file)
-    else:
-        print(Fore.RED + "[!] Invalid source. Provide a valid URL, file, or folder." + Style.RESET_ALL)
-        sys.exit(1)
-
-    # Load options if provided
-    scan = True
-    sandbox = True
-    sig = True
-    allow_unsigned = False
-    if opts:
-        scan = opts.get('scan', True)
-        sandbox = opts.get('sandbox', True)
-        sig = opts.get('sig', True)
-        allow_unsigned = opts.get('allow_unsigned', False)
-
-    # Step 2: Post-installation checks
-    print(Fore.BLUE + "[*] Performing post-installation checks..." + Style.RESET_ALL)
-    # Optimize: gather .exe files first, then process in parallel if possible
-    import concurrent.futures
-    if os.path.isdir(source):
-        exe_files = find_exe_files(source)
-    else:
-        exe_files = [source]
-    total = len(exe_files)
-    results = []
-    with concurrent.futures.ThreadPoolExecutor(max_workers=min(4, total)) as executor:
-        futures = {executor.submit(process_exe, exe, idx): idx for idx, exe in enumerate(exe_files)}
-        for i, future in enumerate(concurrent.futures.as_completed(futures)):
-            progress_val = int((i+1)/total*100)
+        # Step 2: Post-installation checks
+        print(Fore.BLUE + "[*] Performing post-installation checks..." + Style.RESET_ALL)
+        # Optimize: gather .exe files first, then process in parallel if possible
+        import concurrent.futures
+        if os.path.isdir(source):
+            exe_files = find_exe_files(source)
+        else:
+            exe_files = [source]
+        total = len(exe_files)
+        results = []
+        def process_exe(exe_file, idx):
             try:
-                result = future.result()
-                results.append(result)
+                ok, reason = check_blocklist(exe_file, compute_file_hash, log_event)
+                if not ok:
+                    if gui_result_callback:
+                        gui_result_callback(f"[BLOCKED] {exe_file}: {reason}")
+                    print(Fore.RED + f"[!!!] {exe_file} blocked by blocklist: {reason}" + Style.RESET_ALL)
+                    return False
             except Exception as e:
-                print(Fore.RED + f"[!] Exception: {e}" + Style.RESET_ALL)
-            if progress_callback:
-                progress_callback(progress_val)
-    print(Fore.BLUE + f"[*] Installation process completed. {sum(results)} succeeded, {total-sum(results)} failed." + Style.RESET_ALL)
-    print(Fore.GREEN + "[+] Installation completed successfully." + Style.RESET_ALL)
-    log_event('installer_end', {'status': 'success'})
-
-    def process_exe(exe_file, idx):
-        # ...existing code for per-exe install, checks, etc...
-        if sig:
-            signed = check_digital_signature(exe_file)
-            if not signed and not allow_unsigned:
-                print(Fore.RED + f"[!] {exe_file} is not signed. Use override to allow unsigned installers." + Style.RESET_ALL)
+                if gui_result_callback:
+                    gui_result_callback(f"[BLOCKED] {exe_file}: {e}")
+                print(Fore.RED + f"[!!!] {exe_file} blocked by blocklist: {e}" + Style.RESET_ALL)
                 return False
-        if sandbox and not run_in_sandbox(exe_file):
-            print(Fore.RED + f"[!] Error running {exe_file} in sandbox. Skipping this file." + Style.RESET_ALL)
-            return False
-        if scan and not scan_with_defender(exe_file):
-            print(Fore.RED + f"[!] Threat detected in {exe_file} by Windows Defender. Aborting installation." + Style.RESET_ALL)
-            return False
-        try:
-            install_exe(exe_file)
-            print(Fore.GREEN + f"[+] {exe_file} installed successfully." + Style.RESET_ALL)
-            return True
-        except Exception as e:
-            print(Fore.RED + f"[!] Error installing {exe_file}: {e}" + Style.RESET_ALL)
-            return False
+            # Digital signature check
+            if opts and opts.get('sig', True):
+                signed = check_digital_signature(exe_file)
+                if not signed and not opts.get('allow_unsigned', False):
+                    msg = f"[!] {exe_file} is not signed. Use override to allow unsigned installers."
+                    if gui_result_callback:
+                        gui_result_callback(msg)
+                    print(Fore.RED + msg + Style.RESET_ALL)
+                    return False
+            # Sandbox
+            if opts and opts.get('sandbox', True):
+                sandbox_ok, sandbox_log = run_in_sandbox(exe_file)
+                if not sandbox_ok:
+                    msg = f"[!] Error running {exe_file} in sandbox. Skipping this file."
+                    if gui_result_callback:
+                        gui_result_callback(msg)
+                    print(Fore.RED + msg + Style.RESET_ALL)
+                    return False
+                if gui_result_callback and sandbox_log:
+                    gui_result_callback(f"[Sandbox Timeline for {exe_file}]:\n{sandbox_log[:1000]}\n...")
+            # Defender scan
+            if opts and opts.get('scan', True):
+                scan_ok, scan_out = scan_with_defender(exe_file, DEFENDER_PATH)
+                if not scan_ok:
+                    msg = f"[!] Threat detected in {exe_file} by Windows Defender. Aborting installation."
+                    if gui_result_callback:
+                        gui_result_callback(msg)
+                        gui_result_callback(f"Defender output:\n{scan_out}")
+                    print(Fore.RED + msg + Style.RESET_ALL)
+                    return False
+                if gui_result_callback:
+                    gui_result_callback(f"[Defender scan clean for {exe_file}]")
+            try:
+                install_exe(exe_file)
+                msg = f"[+] {exe_file} installed successfully."
+                if gui_result_callback:
+                    gui_result_callback(msg)
+                print(Fore.GREEN + msg + Style.RESET_ALL)
+                return True
+            except Exception as e:
+                msg = f"[!] Error installing {exe_file}: {e}"
+                if gui_result_callback:
+                    gui_result_callback(msg)
+                print(Fore.RED + msg + Style.RESET_ALL)
+                return False
+        with concurrent.futures.ThreadPoolExecutor(max_workers=min(4, total)) as executor:
+            futures = {executor.submit(process_exe, exe, idx): idx for idx, exe in enumerate(exe_files)}
+            for i, future in enumerate(concurrent.futures.as_completed(futures)):
+                progress_val = int((i+1)/total*100)
+                try:
+                    result = future.result()
+                    results.append(result)
+                except Exception as e:
+                    if gui_result_callback:
+                        gui_result_callback(f"[!] Exception: {e}")
+                    print(Fore.RED + f"[!] Exception: {e}" + Style.RESET_ALL)
+                if progress_callback:
+                    progress_callback(progress_val)
+        if gui_result_callback:
+            gui_result_callback(f"[*] Installation process completed. {sum(results)} succeeded, {total-sum(results)} failed.")
+        print(Fore.BLUE + f"[*] Installation process completed. {sum(results)} succeeded, {total-sum(results)} failed." + Style.RESET_ALL)
+        print(Fore.GREEN + "[+] Installation completed successfully." + Style.RESET_ALL)
+        log_event('installer_end', {'status': 'success'})
+    except Exception as e:
+        if gui_result_callback:
+            gui_result_callback(f"[!] Fatal error: {e}")
+        print(Fore.RED + f"[!] Fatal error: {e}" + Style.RESET_ALL)
+        log_event('error', {'stage': 'main', 'error': str(e)})
+        return
 
 if __name__ == '__main__':
     if '--gui' in sys.argv:
-        run_gui()
+        run_gui(main)
     else:
         opts = None
         if '--opts' in sys.argv:
