@@ -1,0 +1,17 @@
+{
+    // See https://go.microsoft.com/fwlink/?LinkId=733558
+    "version": "2.0.0",
+    "tasks": [
+        {
+            "label": "Run Secure Installer",
+            "type": "shell",
+            "command": "python",
+            "args": [
+                "secure_installer.py",
+                "<url-or-folder>"
+            ],
+            "group": "build",
+            "problemMatcher": []
+        }
+    ]
+}
