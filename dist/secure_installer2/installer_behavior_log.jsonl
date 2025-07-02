@@ -4,3 +4,5 @@
 {"timestamp": "2025-07-02T18:23:20.885262Z", "event_type": "error", "details": {"stage": "main", "error": "_path_isfile: path should be string, bytes, os.PathLike or integer, not NoneType"}}
 {"timestamp": "2025-07-02T18:23:26.594020Z", "event_type": "installer_start", "details": {"args": []}}
 {"timestamp": "2025-07-02T18:23:26.594591Z", "event_type": "error", "details": {"stage": "main", "error": "_path_isfile: path should be string, bytes, os.PathLike or integer, not NoneType"}}
+{"timestamp": "2025-07-02T18:24:48.665334Z", "event_type": "installer_start", "details": {"args": []}}
+{"timestamp": "2025-07-02T18:24:48.665824Z", "event_type": "error", "details": {"stage": "main", "error": "_path_isfile: path should be string, bytes, os.PathLike or integer, not NoneType"}}
