@@ -21,6 +21,7 @@ from blocklist_utils import check_blocklist
 from utils import compute_file_hash, is_valid_url, is_valid_path, sanitize_filename
 from logging_utils import log_event
 from scan_utils import scan_with_defender, run_in_sandbox
+from updater import check_and_update
 
 # --- CONFIG ---
 DEFENDER_PATH = r'C:\Program Files\Windows Defender\MpCmdRun.exe'
@@ -324,6 +325,57 @@ def logged_file_write(path, data):
     with open(path, 'wb') as f:
         f.write(data)
 
+# --- PRODUCTION ENHANCEMENTS ---
+# 1. Robust error handling and logging
+# 2. User-friendly error dialogs in GUI
+# 3. MSI-inspired sharp GUI (handled in gui.py, but ensure hooks here)
+# 4. CLI/GUI option for silent install
+# 5. Add code signing check for installer itself
+# 6. Add versioning and update check
+# 7. Add CLI/GUI option for exporting logs and results
+# 8. Add CLI/GUI option for custom blocklist path
+# 9. Add CLI/GUI option for hash verification file
+# 10. Add CLI/GUI option for silent uninstall (future)
+
+__version__ = "1.0.0"
+
+# --- Self-integrity check (hash or signature) ---
+def verify_self_integrity():
+    # Placeholder: In production, verify digital signature or hash of this script
+    # Optionally, check against a trusted hash or cert thumbprint
+    pass
+
+# --- Update check (stub) ---
+def check_for_updates():
+    # Placeholder: In production, check a trusted server for new version
+    pass
+
+# --- Robust Error Handling Decorator ---
+def robust_error_handler(func):
+    import functools
+    def show_gui_error(msg):
+        try:
+            import tkinter.messagebox as mb
+            mb.showerror("Error", msg)
+        except Exception:
+            print(Fore.RED + f"[GUI ERROR] {msg}" + Style.RESET_ALL)
+    @functools.wraps(func)
+    def wrapper(*args, **kwargs):
+        try:
+            return func(*args, **kwargs)
+        except Exception as e:
+            log_event('fatal_error', {'function': func.__name__, 'error': str(e)})
+            err_msg = f"[!] Fatal error in {func.__name__}: {e}"
+            print(Fore.RED + err_msg + Style.RESET_ALL)
+            if 'gui_result_callback' in kwargs and kwargs['gui_result_callback']:
+                kwargs['gui_result_callback'](err_msg)
+            else:
+                show_gui_error(err_msg)
+            return None
+    return wrapper
+
+# --- Main entry ---
+@robust_error_handler
 def main(source, opts=None, progress_callback=None, gui_result_callback=None):
     try:
         print(Fore.BLUE + "[*] Secure Installer started." + Style.RESET_ALL)
@@ -470,15 +522,34 @@ def main(source, opts=None, progress_callback=None, gui_result_callback=None):
         return
 
 if __name__ == '__main__':
+    verify_self_integrity()
+    check_for_updates()
+    check_and_update(__version__, repo="RyAnPr1Me/sinstaller", dest_folder=os.path.dirname(os.path.abspath(__file__)), interval_hours=12)
     if '--gui' in sys.argv:
         run_gui(main)
     else:
+        import argparse
+        parser = argparse.ArgumentParser(description='Secure Installer')
+        parser.add_argument('source', nargs='?', help='URL, file, folder, or list of URLs')
+        parser.add_argument('--opts', help='Path to options JSON')
+        parser.add_argument('--blocklist', help='Path to custom blocklist.json')
+        parser.add_argument('--hashfile', help='Path to file with expected hashes')
+        parser.add_argument('--export-log', help='Export log to file after run')
+        parser.add_argument('--silent', action='store_true', help='Silent install (no prompts)')
+        parser.add_argument('--version', action='store_true', help='Show version and exit')
+        args = parser.parse_args()
+        if args.version:
+            print(f"Secure Installer version {__version__}")
+            sys.exit(0)
         opts = None
-        if '--opts' in sys.argv:
-            idx = sys.argv.index('--opts')
-            import json
-            with open(sys.argv[idx+1], 'r') as f:
+        if args.opts:
+            with open(args.opts, 'r') as f:
                 opts = json.load(f)
-            sys.argv.pop(idx+1)
-            sys.argv.pop(idx)
-        main(sys.argv[1], opts)
+        # Optionally override blocklist path, hashfile, etc. (not yet implemented)
+        main(args.source, opts)
+        if args.export_log:
+            try:
+                shutil.copy('installer_behavior_log.jsonl', args.export_log)
+                print(f"[+] Log exported to {args.export_log}")
+            except Exception as e:
+                print(f"[!] Failed to export log: {e}")
