@@ -1,2 +1,18 @@
 {"timestamp": "2025-07-02T18:23:40.098161Z", "event_type": "installer_start", "details": {"args": []}}
 {"timestamp": "2025-07-02T18:23:40.098629Z", "event_type": "error", "details": {"stage": "main", "error": "_path_isfile: path should be string, bytes, os.PathLike or integer, not NoneType"}}
+{"timestamp": "2025-07-02T19:57:10.970897Z", "event_type": "installer_start", "details": {"args": ["--gui"]}}
+{"timestamp": "2025-07-02T19:57:12.366266Z", "event_type": "process_spawn", "details": {"args": ["WindowsSandbox.exe", "C:\\Users\\ryanlocal\\AppData\\Local\\Temp\\tmpqhkxqo71.wsb"], "cwd": "C:\\Users\\ryanlocal\\sinstaller"}}
+{"timestamp": "2025-07-02T19:57:12.368557Z", "event_type": "error", "details": {"stage": "run_in_sandbox", "error": "[WinError 2] The system cannot find the file specified"}}
+{"timestamp": "2025-07-02T19:57:12.386511Z", "event_type": "installer_end", "details": {"status": "success"}}
+{"timestamp": "2025-07-02T19:57:13.583960Z", "event_type": "installer_start", "details": {"args": ["--gui"]}}
+{"timestamp": "2025-07-02T19:57:14.818260Z", "event_type": "process_spawn", "details": {"args": ["WindowsSandbox.exe", "C:\\Users\\ryanlocal\\AppData\\Local\\Temp\\tmp6kpz52uz.wsb"], "cwd": "C:\\Users\\ryanlocal\\sinstaller"}}
+{"timestamp": "2025-07-02T19:57:14.820647Z", "event_type": "error", "details": {"stage": "run_in_sandbox", "error": "[WinError 2] The system cannot find the file specified"}}
+{"timestamp": "2025-07-02T19:57:14.827695Z", "event_type": "installer_end", "details": {"status": "success"}}
+{"timestamp": "2025-07-02T19:57:19.093011Z", "event_type": "installer_start", "details": {"args": ["--gui"]}}
+{"timestamp": "2025-07-02T19:57:20.181496Z", "event_type": "installer_start", "details": {"args": ["--gui"]}}
+{"timestamp": "2025-07-02T19:57:20.186220Z", "event_type": "process_spawn", "details": {"args": ["WindowsSandbox.exe", "C:\\Users\\ryanlocal\\AppData\\Local\\Temp\\tmpfdocgxub.wsb"], "cwd": "C:\\Users\\ryanlocal\\sinstaller"}}
+{"timestamp": "2025-07-02T19:57:20.188457Z", "event_type": "error", "details": {"stage": "run_in_sandbox", "error": "[WinError 2] The system cannot find the file specified"}}
+{"timestamp": "2025-07-02T19:57:20.195788Z", "event_type": "installer_end", "details": {"status": "success"}}
+{"timestamp": "2025-07-02T19:57:21.422145Z", "event_type": "process_spawn", "details": {"args": ["WindowsSandbox.exe", "C:\\Users\\ryanlocal\\AppData\\Local\\Temp\\tmpjf_j2zn3.wsb"], "cwd": "C:\\Users\\ryanlocal\\sinstaller"}}
+{"timestamp": "2025-07-02T19:57:21.424698Z", "event_type": "error", "details": {"stage": "run_in_sandbox", "error": "[WinError 2] The system cannot find the file specified"}}
+{"timestamp": "2025-07-02T19:57:21.432886Z", "event_type": "installer_end", "details": {"status": "success"}}
