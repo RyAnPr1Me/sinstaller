@@ -7,6 +7,7 @@ import urllib.request
 import zipfile
 
 GITHUB_REPO = "https://github.com/RyAnPr1Me/sinstaller/archive/refs/heads/main.zip"
+INSTALL_DIR = os.path.join(os.path.expanduser("~"), "AppData", "Local", "SecureInstaller")
 
 
 def download_with_progress(url, dest):
@@ -20,18 +21,50 @@ def download_with_progress(url, dest):
             print()  # Newline after complete
     urllib.request.urlretrieve(url, dest, reporthook)
 
+def is_installed():
+    exe_path = os.path.join(INSTALL_DIR, "secure_installer.exe")
+    py_path = os.path.join(INSTALL_DIR, "secure_installer.py")
+    return os.path.exists(exe_path) or os.path.exists(py_path)
+
 def download_and_extract_github_repo(repo_url, extract_to):
+    if is_installed():
+        print(f"Secure Installer already installed at {INSTALL_DIR}. Skipping download.")
+        return INSTALL_DIR
     print(f"Downloading {repo_url} ...")
     zip_path = os.path.join(tempfile.gettempdir(), "repo.zip")
-    download_with_progress(repo_url, zip_path)
+    try:
+        download_with_progress(repo_url, zip_path)
+    except Exception as e:
+        show_popup("Download Error", f"Failed to download repo: {e}")
+        if os.path.exists(zip_path):
+            os.remove(zip_path)
+        raise
     print(f"Extracting to {extract_to} ...")
-    with zipfile.ZipFile(zip_path, 'r') as zip_ref:
-        zip_ref.extractall(extract_to)
-    os.remove(zip_path)
+    try:
+        with zipfile.ZipFile(zip_path, 'r') as zip_ref:
+            zip_ref.extractall(extract_to)
+        os.remove(zip_path)
+    except Exception as e:
+        show_popup("Extract Error", f"Failed to extract repo: {e}")
+        if os.path.exists(zip_path):
+            os.remove(zip_path)
+        raise
     # Find the top-level extracted folder
     for name in os.listdir(extract_to):
         if os.path.isdir(os.path.join(extract_to, name)):
-            return os.path.join(extract_to, name)
+            src = os.path.join(extract_to, name)
+            if not os.path.exists(INSTALL_DIR):
+                shutil.move(src, INSTALL_DIR)
+            else:
+                for item in os.listdir(src):
+                    s = os.path.join(src, item)
+                    d = os.path.join(INSTALL_DIR, item)
+                    if os.path.isdir(s):
+                        shutil.copytree(s, d, dirs_exist_ok=True)
+                    else:
+                        shutil.copy2(s, d)
+                shutil.rmtree(src, ignore_errors=True)
+            return INSTALL_DIR
     return extract_to
 
 def show_popup(title, message):
@@ -153,9 +186,16 @@ def main():
         show_popup("Fatal Error", f"Error: {e}")
         import traceback
         traceback.print_exc()
+        if repo_folder and os.path.exists(repo_folder) and repo_folder != INSTALL_DIR:
+            print(f"Cleaning up {repo_folder} ...")
+            shutil.rmtree(repo_folder, ignore_errors=True)
+        elif os.path.exists(temp_dir):
+            print(f"Cleaning up {temp_dir} ...")
+            shutil.rmtree(temp_dir, ignore_errors=True)
+        sys.exit(1)
     finally:
         # Always clean up temp files
-        if repo_folder and os.path.exists(repo_folder):
+        if repo_folder and os.path.exists(repo_folder) and repo_folder != INSTALL_DIR:
             print(f"Cleaning up {repo_folder} ...")
             shutil.rmtree(repo_folder, ignore_errors=True)
         if os.path.exists(temp_dir):
